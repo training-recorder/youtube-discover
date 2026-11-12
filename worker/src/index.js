@@ -24,7 +24,9 @@ const RESULT_COUNT = 20;           // 画面へ返す件数
 const MIN_SECONDS = 181;           // 3分以下（ショート動画など）は除外
 const CACHE_HOURS = { day: 1, week: 3, month: 6 }; // 結果の保存時間
 const PERIOD_MS = { day: 864e5, week: 7 * 864e5, month: 30 * 864e5 };
-const DAILY_SEARCH_LIMIT = 95;     // 1日の検索回数の自主上限（YouTube側は100回）
+const WIDEN_BELOW = 10;            // この件数未満なら、期間を1段広げて補う
+const WIDER_PERIOD = { day: "week", week: "month" };
+const DAILY_SEARCH_LIMIT = 95;    // 1日の検索回数の自主上限（YouTube側は100回）
 const RATE_LIMIT_PER_MIN = 20;     // 同じ相手からの1分あたりの呼び出し上限
 const TRANSLATE_MODEL = "@cf/meta/m2m100-1.2b";
 
@@ -89,6 +91,7 @@ async function handleVideos(url, env, cors) {
   const lang = scope === "world" ? "en" : "ja";
   let items;
   let stale = false;
+  let widened = null;
 
   if (!freeword && genreKey === "mix") {
     // ---- おまかせ：6ジャンルを混ぜて、ジャンルが交互に並ぶようにする ----
@@ -142,12 +145,29 @@ async function handleVideos(url, env, cors) {
     if (order === "popular") items.sort((a, b) => b.views - a.views);
     else shuffle(items);
     items = items.slice(0, RESULT_COUNT).map((v) => ({ ...v }));
+
+    // 件数が少ないときは、1段広い期間の動画を後ろに足す（元の期間の動画が先）
+    const wider = WIDER_PERIOD[period];
+    if (wider && items.length < WIDEN_BELOW) {
+      const w = await getList(env, { q, period: wider, order, scope });
+      if (w.list) {
+        const seen = new Set(items.map((v) => v.id));
+        const extra = w.list.filter((v) => !seen.has(v.id));
+        if (order === "popular") extra.sort((a, b) => b.views - a.views);
+        else shuffle(extra);
+        const add = extra.slice(0, RESULT_COUNT - items.length).map((v) => ({ ...v }));
+        if (add.length) {
+          items.push(...add);
+          widened = wider;
+        }
+      }
+    }
   }
 
   // 「海外も含む」のとき、日本語でないタイトルを和訳
   if (scope === "world") await addTranslations(env, items);
 
-  return reply({ items, stale }, 200, cors);
+  return reply({ items, stale, widened }, 200, cors);
 }
 
 // 保存済みの結果があればそれを使い、なければYouTubeに問い合わせる

@@ -129,7 +129,13 @@ async function load() {
     setStatus("この条件の動画は見つかりませんでした。期間を「今週」「今月」に広げてみてください。");
     return;
   }
-  setStatus(data.stale ? "（上限のため、少し前の結果を表示しています）" : "");
+  const notes = [];
+  if (data.widened) {
+    const label = { week: "今週", month: "今月" }[data.widened];
+    notes.push(`件数が少ないため、後半は「${label}」の動画で補っています`);
+  }
+  if (data.stale) notes.push("上限のため、少し前の結果を表示しています");
+  setStatus(notes.length ? "（" + notes.join("。") + "）" : "");
   renderList(items);
   $("again").hidden = state.order !== "random";
 }
