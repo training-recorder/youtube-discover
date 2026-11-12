@@ -97,7 +97,7 @@ async function handleVideos(url, env, cors) {
     // ---- おまかせ：6ジャンルを混ぜて、ジャンルが交互に並ぶようにする ----
     const keys = Object.keys(GENRES);
     const results = await Promise.all(
-      keys.map((k) => getList(env, { q: GENRES[k][lang], period, order, scope }))
+      keys.map((k) => getList(env, { q: GENRES[k][lang], period, scope }))
     );
     const pools = [];
     results.forEach((r, i) => {
@@ -135,7 +135,7 @@ async function handleVideos(url, env, cors) {
     else if (GENRES[genreKey]) q = GENRES[genreKey][lang];
     else return reply({ error: "bad" }, 400, cors);
 
-    const r = await getList(env, { q, period, order, scope });
+    const r = await getList(env, { q, period, scope });
     if (!r.list) {
       return reply({ error: r.error }, r.error === "quota" ? 429 : 502, cors);
     }
@@ -149,7 +149,7 @@ async function handleVideos(url, env, cors) {
     // 件数が少ないときは、1段広い期間の動画を後ろに足す（元の期間の動画が先）
     // 1段広げても足りなければ、さらに広げる（24時間→今週→今月）
     for (let wider = WIDER_PERIOD[period]; wider && items.length < WIDEN_BELOW; wider = WIDER_PERIOD[wider]) {
-      const w = await getList(env, { q, period: wider, order, scope });
+      const w = await getList(env, { q, period: wider, scope });
       if (w.list) {
         const seen = new Set(items.map((v) => v.id));
         const extra = w.list.filter((v) => !seen.has(v.id));
@@ -171,15 +171,15 @@ async function handleVideos(url, env, cors) {
 }
 
 // 保存済みの結果があればそれを使い、なければYouTubeに問い合わせる
-async function getList(env, { q, period, order, scope }) {
-  const cacheKey = [q, period, order, scope].join("|");
+async function getList(env, { q, period, scope }) {
+  const cacheKey = ["v2", q, period, scope].join("|");
   const now = Date.now();
   const cached = await env.DB.prepare("SELECT body, expires FROM cache WHERE k = ?").bind(cacheKey).first();
   if (cached && cached.expires > now) return { list: JSON.parse(cached.body), stale: false };
 
   const ok = await searchAllowed(env, SEARCHES_PER_FETCH);
   if (ok) {
-    const res = await fetchFromYouTube(env, { q, period, order, scope });
+    const res = await fetchFromYouTube(env, { q, period, scope });
     if (res.ok) {
       await env.DB.prepare("INSERT OR REPLACE INTO cache (k, body, expires) VALUES (?, ?, ?)")
         .bind(cacheKey, JSON.stringify(res.list), now + CACHE_HOURS[period] * 36e5).run();
@@ -198,7 +198,8 @@ async function getList(env, { q, period, order, scope }) {
 const DURATIONS = ["medium", "long"];
 const SEARCHES_PER_FETCH = DURATIONS.length;
 
-async function fetchFromYouTube(env, { q, period, order, scope }) {
+// 「関連する順」で取得する（「再生回数順」はYouTube側で件数が極端に少なくなるため）
+async function fetchFromYouTube(env, { q, period, scope }) {
   const searches = await Promise.all(
     DURATIONS.map((d) => {
       const sp = new URLSearchParams({
@@ -208,7 +209,7 @@ async function fetchFromYouTube(env, { q, period, order, scope }) {
         q,
         videoDuration: d,
         publishedAfter: new Date(Date.now() - PERIOD_MS[period]).toISOString(),
-        order: order === "popular" ? "viewCount" : "relevance",
+        order: "relevance",
         key: env.YOUTUBE_API_KEY,
       });
       if (scope === "jp") {
