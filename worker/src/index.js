@@ -86,47 +86,63 @@ async function handleVideos(url, env, cors) {
 
   if ([...freeword].length > MAX_QUERY_LEN) return reply({ error: "toolong" }, 400, cors);
 
-  let q;
-  if (freeword) {
-    q = freeword;
-  } else if (GENRES[genreKey]) {
-    q = GENRES[genreKey][scope === "world" ? "en" : "ja"];
-  } else {
-    return reply({ error: "bad" }, 400, cors);
-  }
-
-  const cacheKey = [q, period, order, scope].join("|");
-  const now = Date.now();
-  const cached = await env.DB.prepare("SELECT body, expires FROM cache WHERE k = ?").bind(cacheKey).first();
-
-  let list = null;
+  const lang = scope === "world" ? "en" : "ja";
+  let items;
   let stale = false;
 
-  if (cached && cached.expires > now) {
-    list = JSON.parse(cached.body);
-  } else {
-    const ok = await searchAllowed(env);
-    if (ok) {
-      const res = await fetchFromYouTube(env, { q, period, order, scope });
-      if (res.ok) {
-        list = res.list;
-        await env.DB.prepare("INSERT OR REPLACE INTO cache (k, body, expires) VALUES (?, ?, ?)")
-          .bind(cacheKey, JSON.stringify(list), now + CACHE_HOURS[period] * 36e5).run();
-      } else if (res.quota) {
-        await markQuotaUsed(env);
+  if (!freeword && genreKey === "mix") {
+    // ---- おまかせ：6ジャンルを混ぜて、ジャンルが交互に並ぶようにする ----
+    const keys = Object.keys(GENRES);
+    const results = await Promise.all(
+      keys.map((k) => getList(env, { q: GENRES[k][lang], period, order, scope }))
+    );
+    const pools = [];
+    results.forEach((r, i) => {
+      if (!r.list) return;
+      if (r.stale) stale = true;
+      const l = r.list.map((v) => ({ ...v, genre: keys[i] }));
+      if (order === "popular") l.sort((a, b) => b.views - a.views);
+      else shuffle(l);
+      pools.push(l);
+    });
+    if (!pools.length) {
+      const quota = results.some((r) => r.error === "quota");
+      return reply({ error: quota ? "quota" : "upstream" }, quota ? 429 : 502, cors);
+    }
+    if (order === "random") shuffle(pools); // 並ぶジャンルの順番も毎回変える
+    items = [];
+    const seen = new Set();
+    for (let round = 0; items.length < RESULT_COUNT; round++) {
+      let added = false;
+      for (const p of pools) {
+        const v = p[round];
+        if (!v) continue;
+        added = true;
+        if (seen.has(v.id)) continue;
+        seen.add(v.id);
+        items.push(v);
+        if (items.length >= RESULT_COUNT) break;
       }
+      if (!added) break;
     }
-    if (!list && cached) { list = JSON.parse(cached.body); stale = true; }
-    if (!list) {
-      return reply({ error: ok ? "upstream" : "quota" }, ok ? 502 : 429, cors);
-    }
-  }
+  } else {
+    // ---- ふつうのジャンル／フリーワード ----
+    let q;
+    if (freeword) q = freeword;
+    else if (GENRES[genreKey]) q = GENRES[genreKey][lang];
+    else return reply({ error: "bad" }, 400, cors);
 
-  // 並び：人気順は再生回数の多い順、ランダムは毎回シャッフル（YouTubeへは問い合わせない）
-  let items = list.slice();
-  if (order === "popular") items.sort((a, b) => b.views - a.views);
-  else shuffle(items);
-  items = items.slice(0, RESULT_COUNT).map((v) => ({ ...v }));
+    const r = await getList(env, { q, period, order, scope });
+    if (!r.list) {
+      return reply({ error: r.error }, r.error === "quota" ? 429 : 502, cors);
+    }
+    stale = r.stale;
+    // 並び：人気順は再生回数の多い順、ランダムは毎回シャッフル（YouTubeへは問い合わせない）
+    items = r.list.slice();
+    if (order === "popular") items.sort((a, b) => b.views - a.views);
+    else shuffle(items);
+    items = items.slice(0, RESULT_COUNT).map((v) => ({ ...v }));
+  }
 
   // 「海外も含む」のとき、日本語でないタイトルを和訳
   if (scope === "world") await addTranslations(env, items);
@@ -134,40 +150,78 @@ async function handleVideos(url, env, cors) {
   return reply({ items, stale }, 200, cors);
 }
 
+// 保存済みの結果があればそれを使い、なければYouTubeに問い合わせる
+async function getList(env, { q, period, order, scope }) {
+  const cacheKey = [q, period, order, scope].join("|");
+  const now = Date.now();
+  const cached = await env.DB.prepare("SELECT body, expires FROM cache WHERE k = ?").bind(cacheKey).first();
+  if (cached && cached.expires > now) return { list: JSON.parse(cached.body), stale: false };
+
+  const ok = await searchAllowed(env, SEARCHES_PER_FETCH);
+  if (ok) {
+    const res = await fetchFromYouTube(env, { q, period, order, scope });
+    if (res.ok) {
+      await env.DB.prepare("INSERT OR REPLACE INTO cache (k, body, expires) VALUES (?, ?, ?)")
+        .bind(cacheKey, JSON.stringify(res.list), now + CACHE_HOURS[period] * 36e5).run();
+      return { list: res.list, stale: false };
+    }
+    if (res.quota) await markQuotaUsed(env);
+  }
+  if (cached) return { list: JSON.parse(cached.body), stale: true };
+  return { list: null, error: ok ? "upstream" : "quota" };
+}
+
 // ---------------------------------------------------------------------
 //  YouTube Data API
 // ---------------------------------------------------------------------
-async function fetchFromYouTube(env, { q, period, order, scope }) {
-  const sp = new URLSearchParams({
-    part: "snippet",
-    type: "video",
-    maxResults: "50",
-    q,
-    publishedAfter: new Date(Date.now() - PERIOD_MS[period]).toISOString(),
-    order: order === "popular" ? "viewCount" : "relevance",
-    key: env.YOUTUBE_API_KEY,
-  });
-  if (scope === "jp") {
-    sp.set("regionCode", "JP");
-    sp.set("relevanceLanguage", "ja");
-  }
+// ショート動画で50件の枠が埋まらないよう、「4〜20分」と「20分以上」に分けて検索する
+const DURATIONS = ["medium", "long"];
+const SEARCHES_PER_FETCH = DURATIONS.length;
 
-  const s = await ytGet("https://www.googleapis.com/youtube/v3/search?" + sp);
-  if (!s.ok) return s;
-  const ids = (s.data.items || []).map((i) => i.id && i.id.videoId).filter(Boolean);
+async function fetchFromYouTube(env, { q, period, order, scope }) {
+  const searches = await Promise.all(
+    DURATIONS.map((d) => {
+      const sp = new URLSearchParams({
+        part: "snippet",
+        type: "video",
+        maxResults: "50",
+        q,
+        videoDuration: d,
+        publishedAfter: new Date(Date.now() - PERIOD_MS[period]).toISOString(),
+        order: order === "popular" ? "viewCount" : "relevance",
+        key: env.YOUTUBE_API_KEY,
+      });
+      if (scope === "jp") {
+        sp.set("regionCode", "JP");
+        sp.set("relevanceLanguage", "ja");
+      }
+      return ytGet("https://www.googleapis.com/youtube/v3/search?" + sp);
+    })
+  );
+  const failed = searches.find((s) => !s.ok);
+  if (failed) return failed;
+
+  const ids = [...new Set(
+    searches.flatMap((s) => (s.data.items || []).map((i) => i.id && i.id.videoId)).filter(Boolean)
+  )];
   if (!ids.length) return { ok: true, list: [] };
 
-  const vp = new URLSearchParams({
-    part: "snippet,contentDetails,statistics",
-    id: ids.join(","),
-    maxResults: "50",
-    key: env.YOUTUBE_API_KEY,
-  });
-  const v = await ytGet("https://www.googleapis.com/youtube/v3/videos?" + vp);
-  if (!v.ok) return v;
+  // videos.list は1回50件までなので分けて問い合わせる
+  const details = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const vp = new URLSearchParams({
+      part: "snippet,contentDetails,statistics",
+      id: ids.slice(i, i + 50).join(","),
+      maxResults: "50",
+      key: env.YOUTUBE_API_KEY,
+    });
+    const v = await ytGet("https://www.googleapis.com/youtube/v3/videos?" + vp);
+    if (!v.ok) return v;
+    details.push(...(v.data.items || []));
+  }
 
   const list = [];
-  for (const it of v.data.items || []) {
+  for (const it of details) {
     const sec = isoToSeconds(it.contentDetails && it.contentDetails.duration);
     if (sec < MIN_SECONDS) continue;                                  // 3分以下を除外
     if (it.snippet.liveBroadcastContent !== "none") continue;         // ライブ・配信予定を除外
@@ -207,14 +261,14 @@ async function ytGet(u) {
 function pacificDay() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 }
-async function searchAllowed(env) {
+// cost 回分の検索枠を確保できたら true（同時に呼ばれても上限を超えないよう1文で数える）
+async function searchAllowed(env, cost) {
   const day = pacificDay();
-  const row = await env.DB.prepare("SELECT n FROM quota WHERE day = ?").bind(day).first();
-  if (row && row.n >= DAILY_SEARCH_LIMIT) return false;
-  await env.DB.prepare(
-    "INSERT INTO quota (day, n) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET n = n + 1"
-  ).bind(day).run();
-  return true;
+  await env.DB.prepare("INSERT OR IGNORE INTO quota (day, n) VALUES (?, 0)").bind(day).run();
+  const r = await env.DB.prepare(
+    "UPDATE quota SET n = n + ? WHERE day = ? AND n + ? <= ?"
+  ).bind(cost, day, cost, DAILY_SEARCH_LIMIT).run();
+  return r.meta.changes > 0;
 }
 async function markQuotaUsed(env) {
   await env.DB.prepare(

@@ -68,6 +68,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: 13px; padding: 1px 6px; border-radius: 4px;
 }
 .info { padding: 10px 12px 12px; }
+.tag {
+  display: inline-block; font-size: 12px; font-weight: 700; color: var(--red);
+  border: 1px solid var(--red); border-radius: 10px; padding: 0 8px; margin-bottom: 4px;
+}
 .title { font-size: 17px; font-weight: 700; line-height: 1.4; margin: 0; }
 .orig { font-size: 13px; color: var(--sub); margin: 2px 0 0; }
 .meta { font-size: 14px; color: var(--sub); margin: 6px 0 0; }

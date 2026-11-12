@@ -5,7 +5,9 @@
 const API_BASE = "https://youtube-discover-api.pescados.workers.dev";
 
 // ジャンルボタンの表示名。key は worker/src/index.js の GENRES と同じにする
+// （"mix" は「おまかせ」＝全ジャンルを混ぜて表示する特別なボタン）
 const GENRES = [
+  { key: "mix",      label: "おまかせ" },
   { key: "economy",  label: "経済ニュース" },
   { key: "industry", label: "産業ニュース" },
   { key: "tech",     label: "テクノロジーニュース" },
@@ -22,7 +24,7 @@ const store = {
 };
 
 const state = Object.assign(
-  { genre: "economy", q: "", period: "day", order: "popular", scope: "jp" },
+  { genre: "mix", q: "", period: "day", order: "popular", scope: "jp" },
   store.get("yd_state", {})
 );
 let recent = store.get("yd_recent", []);
@@ -164,6 +166,13 @@ function renderList(items) {
     const m = document.createElement("p");
     m.className = "meta";
     m.textContent = `${v.channel} ・ ${fmtViews(v.views)} ・ ${fmtAgo(v.publishedAt)}`;
+    if (v.genre) {
+      const g = GENRES.find((x) => x.key === v.genre);
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = g ? g.label : v.genre;
+      info.prepend(tag);
+    }
     info.appendChild(m);
 
     a.append(th, info);
