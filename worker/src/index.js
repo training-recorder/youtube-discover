@@ -147,8 +147,8 @@ async function handleVideos(url, env, cors) {
     items = items.slice(0, RESULT_COUNT).map((v) => ({ ...v }));
 
     // 件数が少ないときは、1段広い期間の動画を後ろに足す（元の期間の動画が先）
-    const wider = WIDER_PERIOD[period];
-    if (wider && items.length < WIDEN_BELOW) {
+    // 1段広げても足りなければ、さらに広げる（24時間→今週→今月）
+    for (let wider = WIDER_PERIOD[period]; wider && items.length < WIDEN_BELOW; wider = WIDER_PERIOD[wider]) {
       const w = await getList(env, { q, period: wider, order, scope });
       if (w.list) {
         const seen = new Set(items.map((v) => v.id));
