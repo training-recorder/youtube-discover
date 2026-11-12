@@ -1,0 +1,15 @@
+{
+  "name": "発見ツベ",
+  "short_name": "発見ツベ",
+  "description": "ふだん見ないジャンルのYouTube動画に出会う",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#e62117",
+  "theme_color": "#e62117",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

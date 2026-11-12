@@ -1,0 +1,17 @@
+name = "youtube-discover-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# このページのGitHub PagesのURLだけを受け付ける（末尾の / は付けない）
+ALLOWED_ORIGIN = "https://pescados0de0abvssal-wq.github.io"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "youtube-discover"
+database_id = "b4c11e02-d9a6-4b59-8266-d4559e95f106"
+
+# YouTubeのAPIキーはここに書かない。Cloudflareの「シークレット」に登録する（READMEを参照）
