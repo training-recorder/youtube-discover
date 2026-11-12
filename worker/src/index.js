@@ -245,17 +245,30 @@ async function sha256(s) {
 // ---------------------------------------------------------------------
 //  タイトルの和訳（Workers AI）。失敗しても原題だけ返して止めない
 // ---------------------------------------------------------------------
-const HAS_JA = /[぀-ヿ㐀-鿿]/;
+const IS_JA = /[぀-ヿ]/;            // ひらがな・カタカナがあれば日本語タイトル（漢字だけは中国語の可能性）
+const HAS_JA_CHAR = /[぀-ヿ㐀-鿿]/; // 訳し結果に日本語の文字があるかの確認用
+
+// タイトルの文字から、元の言語を推測する
+function guessLang(t) {
+  if (/[가-힯]/.test(t)) return "korean";
+  if (/[ऀ-ॿ]/.test(t)) return "hindi";
+  if (/[Ѐ-ӿ]/.test(t)) return "russian";
+  if (/[฀-๿]/.test(t)) return "thai";
+  if (/[؀-ۿ]/.test(t)) return "arabic";
+  if (/[㐀-鿿]/.test(t)) return "chinese";
+  return "english";
+}
 
 async function addTranslations(env, items) {
-  const need = items.filter((i) => !HAS_JA.test(i.title));
+  const need = items.filter((i) => !IS_JA.test(i.title));
   if (!need.length) return;
   try {
     const ids = need.map((i) => i.id);
     const rows = await env.DB.prepare(
       `SELECT vid, ja FROM trans WHERE vid IN (${ids.map(() => "?").join(",")})`
     ).bind(...ids).all();
-    const done = new Map((rows.results || []).map((r) => [r.vid, r.ja]));
+    // 日本語になっていない古い保存分は使わず、訳し直す
+    const done = new Map((rows.results || []).filter((r) => HAS_JA_CHAR.test(r.ja)).map((r) => [r.vid, r.ja]));
 
     const todo = [];
     for (const it of need) {
@@ -263,23 +276,23 @@ async function addTranslations(env, items) {
       else todo.push(it);
     }
 
-    let stop = false;
-    for (let i = 0; i < todo.length && !stop; i += 5) {
+    let failures = 0;
+    for (let i = 0; i < todo.length && failures < 5; i += 5) {
       await Promise.all(
         todo.slice(i, i + 5).map(async (it) => {
           try {
             const r = await env.AI.run(TRANSLATE_MODEL, {
               text: it.title.slice(0, 200),
-              source_lang: "english",
+              source_lang: guessLang(it.title),
               target_lang: "japanese",
             });
             const ja = r && r.translated_text;
-            if (ja) {
+            if (ja && HAS_JA_CHAR.test(ja)) { // 日本語になっていなければ表示しない
               it.titleJa = ja;
               await env.DB.prepare("INSERT OR REPLACE INTO trans (vid, ja) VALUES (?, ?)").bind(it.id, ja).run();
             }
           } catch (_) {
-            stop = true; // 無料枠切れなど。以降は訳さず原題のみ
+            failures++; // 無料枠切れなど。続けて失敗したら以降は訳さず原題のみ
           }
         })
       );
