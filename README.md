@@ -5,7 +5,7 @@
 
 - 画面：`docs/`（GitHub Pagesで公開）
 - 裏側：`worker/`（Cloudflare Worker `youtube-discover-api`）
-- 公開URL：https://pescados0de0abvssal-wq.github.io/youtube-discover/
+- 公開URL：https://training-recorder.github.io/youtube-discover/
 
 ## 使い方
 

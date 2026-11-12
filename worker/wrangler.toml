@@ -4,7 +4,7 @@ compatibility_date = "2025-01-01"
 
 [vars]
 # このページのGitHub PagesのURLだけを受け付ける（末尾の / は付けない）
-ALLOWED_ORIGIN = "https://pescados0de0abvssal-wq.github.io"
+ALLOWED_ORIGIN = "https://training-recorder.github.io"
 
 [ai]
 binding = "AI"
